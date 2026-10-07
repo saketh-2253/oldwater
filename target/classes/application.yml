@@ -1,0 +1,37 @@
+spring:
+  application:
+    name: modern-ice-integration
+
+  profiles:
+    default: local
+
+  datasource:
+    url: jdbc:postgresql://localhost:5433/modern_ice_integration
+    username: modernice
+    password: modernice
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+
+  flyway:
+    enabled: true
+
+  codec:
+    max-in-memory-size: 4MB
+
+server:
+  port: 8081
+
+integration:
+  hubspot:
+    base-url: http://localhost:8089/mock/hubspot
+  infor:
+    crm-base-url: http://localhost:8088/mock/infor-crm
+  sqs:
+    region: ${AWS_REGION:us-east-1}
+    queue-url: ${CONTACT_SYNC_QUEUE_URL:}
+    dead-letter-queue-url: ${CONTACT_SYNC_DLQ_URL:}
+    poll-interval-ms: ${CONTACT_SYNC_POLL_INTERVAL_MS:1000}
+    max-attempts: ${CONTACT_SYNC_MAX_ATTEMPTS:5}

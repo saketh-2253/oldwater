@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: modern_ice_integration
+      POSTGRES_USER: modernice
+      POSTGRES_PASSWORD: modernice
+    ports:
+      - "5433:5432"
+    volumes:
+      - modern_ice_pg:/var/lib/postgresql/data
+
+volumes:
+  modern_ice_pg:
