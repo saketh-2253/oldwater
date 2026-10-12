@@ -20,6 +20,10 @@ spring:
 
   codec:
     max-in-memory-size: 4MB
+  task:
+    scheduling:
+      pool:
+        size: 2
 
 server:
   port: 8081
@@ -28,10 +32,22 @@ integration:
   hubspot:
     base-url: http://localhost:8089/mock/hubspot
   infor:
-    crm-base-url: http://localhost:8088/mock/infor-crm
+    sdata:
+      base-url: "${INFOR_SDATA_BASE_URL:http://localhost:${server.port}/mock/infor-sdata/sdata/slx/dynamic/-}"
+      auth:
+        type: ${INFOR_SDATA_AUTH_TYPE:none}
+      fields:
+        contact-customer-id: ${INFOR_SDATA_CONTACT_CUSTOMER_ID_FIELD:MiCustomerId}
+        contact-erp-territory: ${INFOR_SDATA_CONTACT_ERP_TERRITORY_FIELD:ErpTerritory}
+        contact-erp-contact-number: ${INFOR_SDATA_CONTACT_ERP_CONTACT_NUMBER_FIELD:ErpExtId}
+        contact-hubspot-id: ${INFOR_SDATA_CONTACT_HUBSPOT_ID_FIELD:HubSpotRecordId}
+        account-customer-id: ${INFOR_SDATA_ACCOUNT_CUSTOMER_ID_FIELD:ExternalAccountNumber}
+        account-hubspot-id: ${INFOR_SDATA_ACCOUNT_HUBSPOT_ID_FIELD:HubSpotCompanyId}
   sqs:
     region: ${AWS_REGION:us-east-1}
     queue-url: ${CONTACT_SYNC_QUEUE_URL:}
     dead-letter-queue-url: ${CONTACT_SYNC_DLQ_URL:}
+    account-queue-url: ${ACCOUNT_SYNC_QUEUE_URL:}
+    account-dead-letter-queue-url: ${ACCOUNT_SYNC_DLQ_URL:}
     poll-interval-ms: ${CONTACT_SYNC_POLL_INTERVAL_MS:1000}
     max-attempts: ${CONTACT_SYNC_MAX_ATTEMPTS:5}

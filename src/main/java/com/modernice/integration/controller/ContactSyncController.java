@@ -4,12 +4,19 @@ import com.modernice.integration.controller.dto.ContactSyncBatchRequest;
 import com.modernice.integration.controller.dto.ContactSyncBatchResponse;
 import com.modernice.integration.controller.dto.ContactSyncBatchItemResponse;
 import com.modernice.integration.controller.dto.ContactSyncBatchStatusResponse;
+import com.modernice.integration.controller.dto.AccountSyncBatchItemResponse;
+import com.modernice.integration.controller.dto.AccountSyncBatchRequest;
+import com.modernice.integration.controller.dto.AccountSyncBatchResponse;
+import com.modernice.integration.controller.dto.AccountSyncBatchStatusResponse;
 import com.modernice.integration.connector.hubspot.HubSpotClient;
 import com.modernice.integration.connector.hubspot.dto.HubSpotContactRequest;
 import com.modernice.integration.connector.infor.crm.InforCrmClient;
+import com.modernice.integration.connector.infor.crm.dto.InforAccountDto;
 import com.modernice.integration.connector.infor.crm.dto.InforContactDto;
 import com.modernice.integration.workflow.ContactSyncWorkflow;
 import com.modernice.integration.workflow.ContactSyncBatchService;
+import com.modernice.integration.workflow.AccountSyncWorkflow;
+import com.modernice.integration.workflow.AccountSyncBatchService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -31,6 +38,8 @@ public class ContactSyncController {
 
     private final ContactSyncWorkflow contactSyncWorkflow;
     private final ContactSyncBatchService contactSyncBatchService;
+    private final AccountSyncWorkflow accountSyncWorkflow;
+    private final AccountSyncBatchService accountSyncBatchService;
     private final InforCrmClient inforCrmClient;
     private final HubSpotClient hubSpotClient;
 
@@ -206,6 +215,80 @@ public class ContactSyncController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "100") int size) {
         return contactSyncBatchService.getItems(batchId, page, size);
+    }
+
+    @GetMapping("/infor/accounts/{accountId}")
+    public Mono<InforAccountDto> getMockInforAccount(@PathVariable String accountId) {
+        return inforCrmClient.getAccount(accountId)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "INFOR account not found: " + accountId
+                )));
+    }
+
+    @PostMapping("/infor/accounts/{accountId}")
+    public Mono<Void> upsertMockInforAccount(
+            @PathVariable String accountId,
+            @RequestBody InforAccountDto account) {
+        if (!accountId.equals(account.accountId())) {
+            return Mono.error(new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Path accountId must match accountId in request body"
+            ));
+        }
+        return inforCrmClient.upsertAccount(account);
+    }
+
+    @GetMapping("/hubspot/companies/{hubSpotCompanyId}")
+    public Mono<Map<String, Object>> getHubSpotCompany(@PathVariable String hubSpotCompanyId) {
+        return hubSpotClient.getCompany(hubSpotCompanyId)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "HubSpot company not found: " + hubSpotCompanyId
+                )))
+                .map(properties -> {
+                    Map<String, Object> response = new LinkedHashMap<>(properties);
+                    response.put("id", hubSpotCompanyId);
+                    return response;
+                });
+    }
+
+    @PostMapping("/sync/accounts/{accountId}")
+    public Mono<Void> syncAccount(@PathVariable String accountId) {
+        return accountSyncWorkflow.syncInforAccountToHubSpot(accountId);
+    }
+
+    @PostMapping({
+            "/sync/hubspot/companies/{hubSpotCompanyId}",
+            "/hubspot/companies/{hubSpotCompanyId}/sync-to-infor"
+    })
+    public Mono<Void> syncHubSpotCompany(@PathVariable String hubSpotCompanyId) {
+        return accountSyncWorkflow.syncHubSpotCompanyToInfor(hubSpotCompanyId);
+    }
+
+    @PostMapping("/sync/accounts/batch")
+    public ResponseEntity<AccountSyncBatchResponse> syncAccountBatch(
+            @Valid @RequestBody AccountSyncBatchRequest request) {
+        AccountSyncBatchStatusResponse batch = accountSyncBatchService.submit(request.accountIds());
+        String statusUrl = "/api/sync/account-batches/" + batch.batchId();
+        return ResponseEntity.accepted().body(new AccountSyncBatchResponse(
+                batch.batchId(),
+                statusUrl,
+                batch.totalAccounts()
+        ));
+    }
+
+    @GetMapping("/sync/account-batches/{batchId}")
+    public AccountSyncBatchStatusResponse getAccountSyncBatchStatus(@PathVariable UUID batchId) {
+        return accountSyncBatchService.getStatus(batchId);
+    }
+
+    @GetMapping("/sync/account-batches/{batchId}/items")
+    public Page<AccountSyncBatchItemResponse> getAccountSyncBatchItems(
+            @PathVariable UUID batchId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "100") int size) {
+        return accountSyncBatchService.getItems(batchId, page, size);
     }
 
     @PostMapping({

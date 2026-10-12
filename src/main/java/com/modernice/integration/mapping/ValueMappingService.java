@@ -21,6 +21,33 @@ public class ValueMappingService {
             Map.entry("925", "925 - Government")
     );
 
+    private static final Map<String, String> CUSTOMER_TYPE = Map.ofEntries(
+            Map.entry("ME", "Meat"),
+            Map.entry("MA", "Marina"),
+            Map.entry("CA", "Catering"),
+            Map.entry("CO", "Concrete"),
+            Map.entry("SC", "Eng Subcontractor"),
+            Map.entry("GOV", "Government"),
+            Map.entry("NF", "NF"),
+            Map.entry("PIV", "Pkg Ice Vending"),
+            Map.entry("DI", "Competitive Distributor"),
+            Map.entry("PIM", "Pkg Ice - Manufacturer"),
+            Map.entry("PID", "Pkg Ice - Distributor"),
+            Map.entry("DA", "Dairy"),
+            Map.entry("PIB", "Pkg Ice Big 3 HCAGREDDY"),
+            Map.entry("RE", "Refrigeration Contractor"),
+            Map.entry("OT", "Other"),
+            Map.entry("CS", "Convenience Store"),
+            Map.entry("FO", "Restaurant/Food"),
+            Map.entry("COM", "Commercial"),
+            Map.entry("AG", "Agriculture"),
+            Map.entry("DF", "Default"),
+            Map.entry("BE", "Beverage Distributor"),
+            Map.entry("FI", "Fish/Seafood"),
+            Map.entry("CG", "Camp Ground"),
+            Map.entry("GS", "Grocery Store")
+    );
+
     public String map(String mappingType, String sourceValue) {
         if (sourceValue == null) {
             return null;
@@ -28,7 +55,24 @@ public class ValueMappingService {
 
         return switch (mappingType) {
             case "ERP_TERRITORY" -> ERP_TERRITORY.getOrDefault(sourceValue, sourceValue);
+            case "CUSTOMER_TYPE" -> CUSTOMER_TYPE.getOrDefault(sourceValue, sourceValue);
             default -> sourceValue;
         };
+    }
+
+    public String unmap(String mappingType, String targetValue) {
+        if (targetValue == null) {
+            return null;
+        }
+        Map<String, String> mapping = switch (mappingType) {
+            case "ERP_TERRITORY" -> ERP_TERRITORY;
+            case "CUSTOMER_TYPE" -> CUSTOMER_TYPE;
+            default -> Map.of();
+        };
+        return mapping.entrySet().stream()
+                .filter(entry -> entry.getValue().equals(targetValue))
+                .map(Map.Entry::getKey)
+                .findFirst()
+                .orElse(targetValue);
     }
 }

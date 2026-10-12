@@ -16,6 +16,8 @@ import com.modernice.integration.persistence.entity.IntegrationIdentityEntity;
 import com.modernice.integration.persistence.repository.IntegrationIdentityRepository;
 import com.modernice.integration.workflow.ContactSyncWorkflow;
 import com.modernice.integration.workflow.ContactSyncBatchService;
+import com.modernice.integration.workflow.AccountSyncWorkflow;
+import com.modernice.integration.workflow.AccountSyncBatchService;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
@@ -62,6 +64,12 @@ class IntegrationApplicationTests {
     private ContactSyncBatchService contactSyncBatchService;
 
     @Mock
+    private AccountSyncWorkflow accountSyncWorkflow;
+
+    @Mock
+    private AccountSyncBatchService accountSyncBatchService;
+
+    @Mock
     private IntegrationIdentityRepository integrationIdentityRepository;
 
         @Test
@@ -70,7 +78,8 @@ class IntegrationApplicationTests {
             "firstname", "Alex",
             "email", "alex@example.com"
         )));
-        var controller = new ContactSyncController(contactSyncWorkflow, contactSyncBatchService, inforCrmClient, hubSpotClient);
+        var controller = new ContactSyncController(contactSyncWorkflow, contactSyncBatchService,
+                accountSyncWorkflow, accountSyncBatchService, inforCrmClient, hubSpotClient);
 
         var response = controller.getHubSpotContact("hub-123").block();
 
@@ -88,7 +97,8 @@ class IntegrationApplicationTests {
         )));
         when(hubSpotClient.upsertContact(eq("hub-123"), any(HubSpotContactRequest.class)))
             .thenReturn(Mono.empty());
-        var controller = new ContactSyncController(contactSyncWorkflow, contactSyncBatchService, inforCrmClient, hubSpotClient);
+        var controller = new ContactSyncController(contactSyncWorkflow, contactSyncBatchService,
+                accountSyncWorkflow, accountSyncBatchService, inforCrmClient, hubSpotClient);
 
         when(contactSyncWorkflow.syncHubSpotContactToInfor("hub-123")).thenReturn(Mono.empty());
         controller.upsertHubSpotContact("hub-123", Map.of(
@@ -110,7 +120,8 @@ class IntegrationApplicationTests {
             when(hubSpotClient.upsertContact(eq("hs-102"), any(HubSpotContactRequest.class)))
                 .thenReturn(Mono.empty());
             when(contactSyncWorkflow.syncHubSpotContactToInfor("hs-102")).thenReturn(Mono.empty());
-            var controller = new ContactSyncController(contactSyncWorkflow, contactSyncBatchService, inforCrmClient, hubSpotClient);
+            var controller = new ContactSyncController(contactSyncWorkflow, contactSyncBatchService,
+                    accountSyncWorkflow, accountSyncBatchService, inforCrmClient, hubSpotClient);
 
             controller.upsertHubSpotContact("hs-102", Map.of(
                 "crmContactId", "crm-102",

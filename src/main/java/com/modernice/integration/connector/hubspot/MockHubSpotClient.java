@@ -1,6 +1,7 @@
 package com.modernice.integration.connector.hubspot;
 
 import com.modernice.integration.connector.hubspot.dto.HubSpotContactRequest;
+import com.modernice.integration.connector.hubspot.dto.HubSpotCompanyRequest;
 import org.springframework.context.annotation.Profile;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,7 +20,9 @@ public class MockHubSpotClient implements HubSpotClient {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(MockHubSpotClient.class);
     private final Map<String, Map<String, Object>> contacts = new ConcurrentHashMap<>();
+    private final Map<String, Map<String, Object>> companies = new ConcurrentHashMap<>();
     private final AtomicLong nextContactId = new AtomicLong(987654320);
+    private final AtomicLong nextCompanyId = new AtomicLong(500000000);
 
     @Override
     public Mono<Map<String, Object>> getContact(String hubSpotContactId) {
@@ -81,6 +84,47 @@ public class MockHubSpotClient implements HubSpotClient {
 
                 properties.putAll(changedProperties);
                 LOGGER.info("HubSpot mock updated contact {} with changed properties: {}", hubSpotContactId, changedProperties);
+            }
+        });
+    }
+
+    @Override
+    public Mono<Map<String, Object>> getCompany(String hubSpotCompanyId) {
+        return Mono.justOrEmpty(companies.get(hubSpotCompanyId))
+                .map(existing -> new ConcurrentHashMap<>(existing));
+    }
+
+    @Override
+    public Mono<String> createCompany(HubSpotCompanyRequest request) {
+        return Mono.fromSupplier(() -> {
+            String hubSpotCompanyId = Long.toString(nextCompanyId.incrementAndGet());
+            companies.put(hubSpotCompanyId, new ConcurrentHashMap<>(request.properties()));
+            LOGGER.info("HubSpot mock created company {}: {}", hubSpotCompanyId, request.properties());
+            return hubSpotCompanyId;
+        });
+    }
+
+    @Override
+    public Mono<Void> updateCompany(String hubSpotCompanyId, HubSpotCompanyRequest request) {
+        return Mono.fromRunnable(() -> {
+            Map<String, Object> properties = companies.computeIfAbsent(
+                    hubSpotCompanyId,
+                    ignored -> new ConcurrentHashMap<>()
+            );
+            synchronized (properties) {
+                Map<String, Object> changedProperties = new LinkedHashMap<>();
+                request.properties().forEach((key, value) -> {
+                    if (!Objects.equals(properties.get(key), value)) {
+                        changedProperties.put(key, value);
+                    }
+                });
+                if (changedProperties.isEmpty()) {
+                    LOGGER.info("HubSpot mock company {} is already up to date; no update needed", hubSpotCompanyId);
+                    return;
+                }
+                properties.putAll(changedProperties);
+                LOGGER.info("HubSpot mock updated company {} with changed properties: {}",
+                        hubSpotCompanyId, changedProperties);
             }
         });
     }
