@@ -7,6 +7,7 @@ import org.springframework.context.annotation.Profile;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.time.Instant;
@@ -71,6 +72,10 @@ public class MockInforCrmClient implements InforCrmClient {
         return Mono.justOrEmpty(contacts.get(crmContactId));
     }
 
+    public Flux<InforContactDto> listContacts() {
+        return Flux.fromIterable(contacts.values());
+    }
+
     @Override
     public Mono<Void> setContact(InforContactDto contact) {
         return Mono.fromRunnable(() -> {
@@ -122,6 +127,10 @@ public class MockInforCrmClient implements InforCrmClient {
     @Override
     public Mono<InforAccountDto> getAccount(String accountId) {
         return Mono.justOrEmpty(accounts.get(accountId));
+    }
+
+    public Flux<InforAccountDto> listAccounts() {
+        return Flux.fromIterable(accounts.values());
     }
 
     @Override

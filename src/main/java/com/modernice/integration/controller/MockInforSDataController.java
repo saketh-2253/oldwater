@@ -7,19 +7,31 @@ import com.modernice.integration.connector.infor.crm.dto.InforContactDto;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.net.URI;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @RestController
 @Profile("local")
 @RequestMapping("/mock/infor-sdata/sdata/slx/dynamic/-")
 public class MockInforSDataController {
+
+    private static final String MOCK_SDATA_ROOT = "/mock/infor-sdata/sdata/slx/dynamic/-/";
+    private static final Pattern ACCOUNT_CONTACTS_FILTER =
+            Pattern.compile("^\\s*Account\\.Id\\s+eq\\s+'((?:''|[^'])*)'\\s*$");
+    private static final String ZERO_UUID = "00000000-0000-0000-0000-000000000000";
 
     private final MockInforCrmClient mockInforCrmClient;
     private final InforSDataMapper mapper;
@@ -29,21 +41,35 @@ public class MockInforSDataController {
         this.mapper = mapper;
     }
 
+    @GetMapping("/contacts")
+    public Mono<Map<String, Object>> listContacts(
+            @RequestParam(required = false) String where,
+            ServerHttpRequest request) {
+        String accountId = accountIdFromWhere(where);
+        return mockInforCrmClient.listContacts()
+                .filter(contact -> accountId == null || accountId.equals(contact.crmAccountId()))
+                .map(contact -> contactResource(contact, request))
+                .collectList()
+                .map(resources -> feed(request.getURI().toString(), resources));
+    }
+
     @GetMapping("/contacts('{contactId}')")
-    public Mono<Map<String, Object>> getContact(@PathVariable String contactId) {
+    public Mono<Map<String, Object>> getContact(
+            @PathVariable String contactId,
+            ServerHttpRequest request) {
         return mockInforCrmClient.getContact(contactId)
                 .switchIfEmpty(notFound("Contact", contactId))
-                .map(this::contactResource);
+                .map(contact -> contactResource(contact, request));
     }
 
     @PutMapping("/contacts('{contactId}')")
     public Mono<Map<String, Object>> updateContact(
             @PathVariable String contactId,
-            @RequestBody Map<String, Object> updates) {
+            @RequestBody Map<String, Object> updates,
+            ServerHttpRequest request) {
         return mockInforCrmClient.getContact(contactId)
-                .switchIfEmpty(notFound("Contact", contactId))
                 .flatMap(current -> {
-                    Map<String, Object> merged = contactResource(current);
+                    Map<String, Object> merged = contactResource(current, request);
                     merge(merged, updates);
                     InforContactDto mapped = mapper.fromSDataContact(
                             contactId,
@@ -76,13 +102,25 @@ public class MockInforSDataController {
                                     : current.hubSpotRecordId()
                     );
                     return mockInforCrmClient.upsertContact(updated)
-                            .thenReturn(contactResource(updated));
-                });
+                            .thenReturn(contactResource(updated, request));
+                })
+                .switchIfEmpty(Mono.defer(() -> {
+                    InforContactDto created = mapper.fromSDataContact(
+                            contactId,
+                            updates,
+                            InforSDataMapper.nested(updates, "Address"),
+                            InforSDataMapper.nested(updates, "Account")
+                    );
+                    return mockInforCrmClient.upsertContact(created)
+                            .thenReturn(contactResource(created, request));
+                }));
     }
 
     @PostMapping("/contacts")
     @ResponseStatus(HttpStatus.CREATED)
-    public Mono<Map<String, Object>> createContact(@RequestBody Map<String, Object> properties) {
+    public Mono<Map<String, Object>> createContact(
+            @RequestBody Map<String, Object> properties,
+            ServerHttpRequest request) {
         String contactId = "C-MOCK-" + UUID.randomUUID();
         InforContactDto contact = mapper.fromSDataContact(
                 contactId,
@@ -90,24 +128,59 @@ public class MockInforSDataController {
                 InforSDataMapper.nested(properties, "Address"),
                 InforSDataMapper.nested(properties, "Account")
         );
-        return mockInforCrmClient.upsertContact(contact).thenReturn(contactResource(contact));
+        return mockInforCrmClient.upsertContact(contact).thenReturn(contactResource(contact, request));
+    }
+
+    @GetMapping("/accounts")
+    public Mono<Map<String, Object>> listAccounts(
+            @RequestParam(defaultValue = "1") int startIndex,
+            @RequestParam(defaultValue = "50") int count,
+            ServerHttpRequest request) {
+        if (startIndex < 1 || count < 1) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "startIndex and count must be positive integers");
+        }
+        return mockInforCrmClient.listAccounts()
+                .map(account -> accountResource(account, request))
+                .collectList()
+                .map(resources -> pagedFeed(request.getURI().toString(), resources, startIndex, count));
     }
 
     @GetMapping("/accounts('{accountId}')")
-    public Mono<Map<String, Object>> getAccount(@PathVariable String accountId) {
+    public Mono<Map<String, Object>> getAccount(
+            @PathVariable String accountId,
+            ServerHttpRequest request) {
         return mockInforCrmClient.getAccount(accountId)
                 .switchIfEmpty(notFound("Account", accountId))
-                .map(this::accountResource);
+                .map(account -> accountResource(account, request));
+    }
+
+    @GetMapping("/accounts('{accountId}')/Addresses")
+    public Mono<Map<String, Object>> listAccountAddresses(
+            @PathVariable String accountId,
+            ServerHttpRequest request) {
+        return mockInforCrmClient.getAccount(accountId)
+                .switchIfEmpty(notFound("Account", accountId))
+                .map(account -> addressEntry(
+                                "account-" + accountId,
+                                account.address1(),
+                                account.address2(),
+                                account.city(),
+                                account.state(),
+                                account.postalCode(),
+                                request
+                        ))
+                .map(address -> feed(request.getURI().toString(), java.util.List.of(address)));
     }
 
     @PutMapping("/accounts('{accountId}')")
     public Mono<Map<String, Object>> updateAccount(
             @PathVariable String accountId,
-            @RequestBody Map<String, Object> updates) {
+            @RequestBody Map<String, Object> updates,
+            ServerHttpRequest request) {
         return mockInforCrmClient.getAccount(accountId)
-                .switchIfEmpty(notFound("Account", accountId))
                 .flatMap(current -> {
-                    Map<String, Object> merged = accountResource(current);
+                    Map<String, Object> merged = accountResource(current, request);
                     merge(merged, updates);
                     InforAccountDto mapped = mapper.fromSDataAccount(
                             accountId,
@@ -137,40 +210,78 @@ public class MockInforSDataController {
                                     : current.hubSpotCompanyId()
                     );
                     return mockInforCrmClient.upsertAccount(updated)
-                            .thenReturn(accountResource(updated));
-                });
+                            .thenReturn(accountResource(updated, request));
+                })
+                .switchIfEmpty(Mono.defer(() -> {
+                    InforAccountDto created = mapper.fromSDataAccount(
+                            accountId,
+                            updates,
+                            InforSDataMapper.nested(updates, "Address")
+                    );
+                    return mockInforCrmClient.upsertAccount(created)
+                            .thenReturn(accountResource(created, request));
+                }));
     }
 
     @PostMapping("/accounts")
     @ResponseStatus(HttpStatus.CREATED)
-    public Mono<Map<String, Object>> createAccount(@RequestBody Map<String, Object> properties) {
+    public Mono<Map<String, Object>> createAccount(
+            @RequestBody Map<String, Object> properties,
+            ServerHttpRequest request) {
         String accountId = "A-MOCK-" + UUID.randomUUID();
         InforAccountDto account = mapper.fromSDataAccount(
                 accountId,
                 properties,
                 InforSDataMapper.nested(properties, "Address")
         );
-        return mockInforCrmClient.upsertAccount(account).thenReturn(accountResource(account));
+        return mockInforCrmClient.upsertAccount(account).thenReturn(accountResource(account, request));
+    }
+
+    @GetMapping("/addresses")
+    public Mono<Map<String, Object>> listAddresses(ServerHttpRequest request) {
+        Flux<Map<String, Object>> accountAddresses = mockInforCrmClient.listAccounts()
+                .map(account -> addressEntry(
+                        "account-" + account.accountId(),
+                        account.address1(),
+                        account.address2(),
+                        account.city(),
+                        account.state(),
+                        account.postalCode(),
+                        request
+                ));
+        Flux<Map<String, Object>> contactAddresses = mockInforCrmClient.listContacts()
+                .map(contact -> addressEntry(
+                        "contact-" + contact.crmContactId(),
+                        null,
+                        null,
+                        contact.city(),
+                        contact.state(),
+                        null,
+                        request
+                ));
+        return Flux.concat(accountAddresses, contactAddresses)
+                .collectList()
+                .map(resources -> feed(request.getURI().toString(), resources));
     }
 
     @GetMapping("/addresses('{addressId}')")
-    public Mono<Map<String, Object>> getAddress(@PathVariable String addressId) {
+    public Mono<Map<String, Object>> getAddress(
+            @PathVariable String addressId,
+            ServerHttpRequest request) {
         if (addressId.startsWith("contact-")) {
             String contactId = addressId.substring("contact-".length());
             return mockInforCrmClient.getContact(contactId)
                     .switchIfEmpty(notFound("Address", addressId))
-                    .map(contact -> addressResource(
-                            null, null, contact.city(), contact.state(), null
-                    ));
+                    .map(contact -> addressEntry(
+                            addressId, null, null, contact.city(), contact.state(), null, request));
         }
         if (addressId.startsWith("account-")) {
             String accountId = addressId.substring("account-".length());
             return mockInforCrmClient.getAccount(accountId)
                     .switchIfEmpty(notFound("Address", addressId))
-                    .map(account -> addressResource(
-                            account.address1(), account.address2(), account.city(),
-                            account.state(), account.postalCode()
-                    ));
+                    .map(account -> addressEntry(
+                            addressId, account.address1(), account.address2(), account.city(),
+                            account.state(), account.postalCode(), request));
         }
         return notFound("Address", addressId);
     }
@@ -178,7 +289,8 @@ public class MockInforSDataController {
     @PutMapping("/addresses('{addressId}')")
     public Mono<Map<String, Object>> updateAddress(
             @PathVariable String addressId,
-            @RequestBody Map<String, Object> updates) {
+            @RequestBody Map<String, Object> updates,
+            ServerHttpRequest request) {
         if (addressId.startsWith("contact-")) {
             String contactId = addressId.substring("contact-".length());
             return mockInforCrmClient.getContact(contactId)
@@ -210,9 +322,8 @@ public class MockInforSDataController {
                                 current.hubSpotRecordId()
                         );
                         return mockInforCrmClient.upsertContact(updated)
-                                .thenReturn(addressResource(
-                                        null, null, updated.city(), updated.state(), null
-                                ));
+                                .thenReturn(addressEntry(addressId, null, null, updated.city(),
+                                        updated.state(), null, request));
                     });
         }
         if (addressId.startsWith("account-")) {
@@ -245,31 +356,103 @@ public class MockInforSDataController {
                                 current.hubSpotCompanyId()
                         );
                         return mockInforCrmClient.upsertAccount(updated)
-                                .thenReturn(addressResource(
-                                        updated.address1(), updated.address2(), updated.city(),
-                                        updated.state(), updated.postalCode()
-                                ));
+                                .thenReturn(addressEntry(addressId, updated.address1(), updated.address2(),
+                                        updated.city(), updated.state(), updated.postalCode(), request));
                     });
         }
         return notFound("Address", addressId);
     }
 
-    private Map<String, Object> contactResource(InforContactDto contact) {
+    private Map<String, Object> contactResource(InforContactDto contact, ServerHttpRequest request) {
         Map<String, Object> resource = new LinkedHashMap<>(mapper.toSDataContact(contact));
         resource.put("$key", contact.crmContactId());
-        resource.put("$url", "contacts('" + contact.crmContactId() + "')");
+        resource.put("$url", sdataRoot(request) + "contacts('" + contact.crmContactId() + "')");
         resource.put("$updated", Instant.now().toString());
-        resource.put("Address", Map.of("$key", "contact-" + contact.crmContactId()));
+        resource.put("Address", addressReference("contact-" + contact.crmContactId(), request));
         return resource;
     }
 
-    private Map<String, Object> accountResource(InforAccountDto account) {
+    private Map<String, Object> accountResource(InforAccountDto account, ServerHttpRequest request) {
         Map<String, Object> resource = new LinkedHashMap<>(mapper.toSDataAccount(account));
         resource.put("$key", account.accountId());
-        resource.put("$url", "accounts('" + account.accountId() + "')");
+        resource.put("$url", sdataRoot(request) + "accounts('" + account.accountId() + "')");
         resource.put("$updated", Instant.now().toString());
-        resource.put("Address", Map.of("$key", "account-" + account.accountId()));
+        resource.put("Address", addressReference("account-" + account.accountId(), request));
+        resource.put("Addresses", Map.of(
+                "$url", sdataRoot(request) + "accounts('" + account.accountId() + "')/Addresses"));
+        resource.put("Contacts", Map.of("$url", contactsUrl(account.accountId(), request)));
         return resource;
+    }
+
+    private Map<String, Object> addressReference(String addressId, ServerHttpRequest request) {
+        Map<String, Object> reference = new LinkedHashMap<>();
+        reference.put("$key", addressId);
+        reference.put("$url", sdataRoot(request) + "addresses('" + addressId + "')");
+        reference.put("$uuid", ZERO_UUID);
+        reference.put("$lookup", sdataRoot(request) + "addresses?format=json");
+        return reference;
+    }
+
+    private Map<String, Object> addressEntry(
+            String addressId,
+            String address1,
+            String address2,
+            String city,
+            String state,
+            String postalCode,
+            ServerHttpRequest request) {
+        Map<String, Object> resource = addressResource(address1, address2, city, state, postalCode);
+        resource.put("$key", addressId);
+        resource.put("$url", sdataRoot(request) + "addresses('" + addressId + "')");
+        resource.put("$uuid", ZERO_UUID);
+        resource.put("$updated", Instant.now().toString());
+        return resource;
+    }
+
+    private Map<String, Object> feed(String url, java.util.List<Map<String, Object>> resources) {
+        return pagedFeed(url, resources, 1, resources.size());
+    }
+
+    private Map<String, Object> pagedFeed(
+            String url,
+            java.util.List<Map<String, Object>> allResources,
+            int startIndex,
+            int count) {
+        int fromIndex = Math.min(startIndex - 1, allResources.size());
+            int toIndex = fromIndex + Math.min(count, allResources.size() - fromIndex);
+        java.util.List<Map<String, Object>> resources = allResources.subList(fromIndex, toIndex);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("$url", url);
+        result.put("$totalResults", allResources.size());
+        result.put("$startIndex", startIndex);
+        result.put("$itemsPerPage", resources.size());
+        result.put("$resources", resources);
+        return result;
+    }
+
+    private String contactsUrl(String accountId, ServerHttpRequest request) {
+        String where = "Account.Id eq '" + accountId.replace("'", "''") + "'";
+        String encodedWhere = URLEncoder.encode(where, StandardCharsets.UTF_8)
+                .replace("+", "%20")
+                .replace("%27", "'");
+        return sdataRoot(request) + "contacts?format=json&where=" + encodedWhere;
+    }
+
+    private static String accountIdFromWhere(String where) {
+        if (where == null || where.isBlank()) {
+            return null;
+        }
+        Matcher matcher = ACCOUNT_CONTACTS_FILTER.matcher(where);
+        if (!matcher.matches()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Unsupported contacts filter; expected Account.Id eq '<accountId>'");
+        }
+        return matcher.group(1).replace("''", "'");
+    }
+
+    private static String sdataRoot(ServerHttpRequest request) {
+        URI uri = request.getURI();
+        return uri.getScheme() + "://" + uri.getRawAuthority() + MOCK_SDATA_ROOT;
     }
 
     private Map<String, Object> addressResource(

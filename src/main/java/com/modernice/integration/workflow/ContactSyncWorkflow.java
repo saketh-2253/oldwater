@@ -8,7 +8,9 @@ import com.modernice.integration.identity.ContactIdentityService;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 
 import java.util.Optional;
@@ -77,18 +79,22 @@ public class ContactSyncWorkflow {
 
     public Mono<Void> syncHubSpotContactToInfor(String hubSpotContactId) {
         return hubSpotClient.getContact(hubSpotContactId)
-                .switchIfEmpty(Mono.defer(() -> {
-                    LOGGER.warn("HubSpot contact {} not found; cannot sync to INFOR", hubSpotContactId);
-                    return Mono.empty();
-                }))
+                .switchIfEmpty(Mono.error(new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "HubSpot contact not found: " + hubSpotContactId
+                )))
                 .map(hubSpotContactMapper::fromHubSpot)
                 .flatMap(contact -> {
                     String crmContactId = Optional.ofNullable(contact.crmContactId())
+                            .filter(id -> !id.isBlank())
                             .orElseGet(() -> contactIdentityService.findCrmContactId(hubSpotContactId).orElse(null));
 
                     if (crmContactId == null || crmContactId.isBlank()) {
-                        LOGGER.warn("No CRM contact ID found for HubSpot ID {}; skipping reverse sync", hubSpotContactId);
-                        return Mono.empty();
+                        return Mono.error(new ResponseStatusException(
+                                HttpStatus.BAD_REQUEST,
+                                "HubSpot contact must include crm_contact_id or have a saved identity mapping: "
+                                        + hubSpotContactId
+                        ));
                     }
 
                     LOGGER.info("HubSpot contact {} found for CRM contact {}; syncing HubSpot data to INFOR", hubSpotContactId, crmContactId);

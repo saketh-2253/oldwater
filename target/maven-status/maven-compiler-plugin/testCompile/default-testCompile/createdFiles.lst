@@ -1,1 +1,13 @@
+com\modernice\integration\connector\hubspot\mapper\HubSpotBusinessObjectMapperTests.class
+com\modernice\integration\MockInforBusinessSDataControllerTests.class
+com\modernice\integration\SDataInforCrmClientTests.class
+com\modernice\integration\InforSDataMapperTests.class
+com\modernice\integration\MockInforSDataControllerTests.class
 com\modernice\integration\IntegrationApplicationTests.class
+com\modernice\integration\RealHubSpotClientTests.class
+com\modernice\integration\MockInforSDataControllerTests$1.class
+com\modernice\integration\SDataInforCrmClientTests$1.class
+com\modernice\integration\BusinessSyncWorkflowTests.class
+com\modernice\integration\AccountSyncTests.class
+com\modernice\integration\ContactSyncBatchTests.class
+com\modernice\integration\AccountSyncBatchTests.class

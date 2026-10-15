@@ -9,6 +9,7 @@ import com.modernice.integration.controller.dto.AccountSyncBatchRequest;
 import com.modernice.integration.controller.dto.AccountSyncBatchResponse;
 import com.modernice.integration.controller.dto.AccountSyncBatchStatusResponse;
 import com.modernice.integration.connector.hubspot.HubSpotClient;
+import com.modernice.integration.connector.hubspot.dto.HubSpotCompanyRequest;
 import com.modernice.integration.connector.hubspot.dto.HubSpotContactRequest;
 import com.modernice.integration.connector.infor.crm.InforCrmClient;
 import com.modernice.integration.connector.infor.crm.dto.InforAccountDto;
@@ -88,8 +89,7 @@ public class ContactSyncController {
                 return hubSpotClient.upsertContact(
                         hubSpotContactId,
                         new HubSpotContactRequest(mergedProperties)
-                    )
-                        .then(Mono.defer(() -> contactSyncWorkflow.syncHubSpotContactToInfor(hubSpotContactId)));
+                    );
             });
     }
 
@@ -113,9 +113,63 @@ public class ContactSyncController {
         };
     }
 
+    @PostMapping("/hubspot/companies/{hubSpotCompanyId}")
+    public Mono<Void> upsertHubSpotCompany(
+            @PathVariable String hubSpotCompanyId,
+            @RequestParam Map<String, String> updates) {
+        if (updates.isEmpty()) {
+            return Mono.error(new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Provide at least one HubSpot company property to update"
+            ));
+        }
+
+        Map<String, Object> properties = new LinkedHashMap<>();
+        updates.forEach((name, value) -> properties.put(toHubSpotCompanyPropertyName(name), value));
+
+        return hubSpotClient.getCompany(hubSpotCompanyId)
+                .switchIfEmpty(Mono.defer(() -> {
+                    Object inforAccountId = properties.get("infor_account_id");
+                    if (inforAccountId == null || inforAccountId.toString().isBlank()) {
+                        return Mono.error(new ResponseStatusException(
+                                HttpStatus.BAD_REQUEST,
+                                "inforAccountId is required when creating a HubSpot company"
+                        ));
+                    }
+                    return Mono.just(Map.<String, Object>of());
+                }))
+                .flatMap(existing -> {
+                    Map<String, Object> mergedProperties = new LinkedHashMap<>(existing);
+                    mergedProperties.putAll(properties);
+                    return hubSpotClient.updateCompany(
+                            hubSpotCompanyId,
+                            new HubSpotCompanyRequest(mergedProperties)
+                    );
+                });
+    }
+
+    private String toHubSpotCompanyPropertyName(String name) {
+        return switch (name) {
+            case "customerId" -> "customer_id";
+            case "address1" -> "address";
+            case "postalCode" -> "zip";
+            case "subType" -> "subtype";
+            case "erpTerritory" -> "erp_territory";
+            case "accountManager" -> "account_manager";
+            case "customerType" -> "customer_type";
+            case "owner", "inforOwner" -> "infor_owner";
+            case "accountId", "inforAccountId" -> "infor_account_id";
+            default -> name;
+        };
+    }
+
     @GetMapping("/infor/contacts/{crmContactId}")
     public Mono<InforContactDto> getMockInforContact(@PathVariable String crmContactId) {
-        return inforCrmClient.getContact(crmContactId);
+        return inforCrmClient.getContact(crmContactId)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "INFOR contact not found: " + crmContactId
+                )));
     }
 
     @PostMapping("/infor/contacts/{crmContactId}")

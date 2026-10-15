@@ -1,7 +1,11 @@
 C:\Users\skondampally\Desktop\modern-ice-integration-main\modern-ice-integration\src\test\java\com\modernice\integration\AccountSyncBatchTests.java
 C:\Users\skondampally\Desktop\modern-ice-integration-main\modern-ice-integration\src\test\java\com\modernice\integration\AccountSyncTests.java
+C:\Users\skondampally\Desktop\modern-ice-integration-main\modern-ice-integration\src\test\java\com\modernice\integration\BusinessSyncWorkflowTests.java
+C:\Users\skondampally\Desktop\modern-ice-integration-main\modern-ice-integration\src\test\java\com\modernice\integration\connector\hubspot\mapper\HubSpotBusinessObjectMapperTests.java
 C:\Users\skondampally\Desktop\modern-ice-integration-main\modern-ice-integration\src\test\java\com\modernice\integration\ContactSyncBatchTests.java
 C:\Users\skondampally\Desktop\modern-ice-integration-main\modern-ice-integration\src\test\java\com\modernice\integration\InforSDataMapperTests.java
 C:\Users\skondampally\Desktop\modern-ice-integration-main\modern-ice-integration\src\test\java\com\modernice\integration\IntegrationApplicationTests.java
+C:\Users\skondampally\Desktop\modern-ice-integration-main\modern-ice-integration\src\test\java\com\modernice\integration\MockInforBusinessSDataControllerTests.java
 C:\Users\skondampally\Desktop\modern-ice-integration-main\modern-ice-integration\src\test\java\com\modernice\integration\MockInforSDataControllerTests.java
+C:\Users\skondampally\Desktop\modern-ice-integration-main\modern-ice-integration\src\test\java\com\modernice\integration\RealHubSpotClientTests.java
 C:\Users\skondampally\Desktop\modern-ice-integration-main\modern-ice-integration\src\test\java\com\modernice\integration\SDataInforCrmClientTests.java

@@ -30,8 +30,16 @@ server:
 
 integration:
   hubspot:
-    base-url: http://localhost:8089/mock/hubspot
+    base-url: ${HUBSPOT_BASE_URL:https://api.hubapi.com}
+    access-token: ${HUBSPOT_ACCESS_TOKEN:}
+    max-retries: ${HUBSPOT_MAX_RETRIES:3}
   infor:
+    business:
+      crm-base-url: ${INFOR_CRM_BASE_URL:}
+      erp-base-url: ${INFOR_ERP_BASE_URL:}
+      data-lake-base-url: ${INFOR_DATA_LAKE_BASE_URL:}
+      auth-type: ${INFOR_BUSINESS_AUTH_TYPE:none}
+      access-token: ${INFOR_BUSINESS_ACCESS_TOKEN:}
     sdata:
       base-url: "${INFOR_SDATA_BASE_URL:http://localhost:${server.port}/mock/infor-sdata/sdata/slx/dynamic/-}"
       auth:

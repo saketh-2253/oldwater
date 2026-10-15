@@ -56,9 +56,10 @@ Example local mock requests:
 ```http
 GET http://localhost:8081/mock/infor-sdata/sdata/slx/dynamic/-/contacts('103')?format=json
 GET http://localhost:8081/mock/infor-sdata/sdata/slx/dynamic/-/accounts('A500')?format=json
+GET http://localhost:8081/mock/infor-sdata/sdata/slx/dynamic/-/accounts?startIndex=1&count=50&format=json
 ```
 
-The mock follows the documented SData resource paths and JSON entry conventions, including `$key` references for related accounts and addresses. The middleware's existing `/api/infor/...` test endpoints now go through the SData client rather than accessing the mock store directly.
+The mock follows the supplied SData examples for JSON entries and feeds. Account collection requests return a feed with `$resources`, `$totalResults`, `$startIndex`, and `$itemsPerPage`. Account and Contact `Address` references include `$key`, `$url`, `$uuid`, and `$lookup`; account resources expose an `Addresses` navigation link and a `Contacts` link filtered by `Account.Id`. The linked `GET /contacts?...where=Account.Id%20eq%20'accountId'`, `GET /addresses?format=json`, and `GET /accounts('{accountId}')/Addresses` endpoints return SData feeds with a `$resources` array. Links are generated from the incoming request host and point back to this local mock. Other live Infor navigation collections not represented by the mock's data model are intentionally not emitted. The middleware's existing `/api/infor/...` test endpoints now go through the SData client rather than accessing the mock store directly.
 
 To point the client at a real SData server later, set `INFOR_SDATA_BASE_URL` to the resource-kind root ending in `/sdata/slx/dynamic/-` (or the corresponding root for your Infor deployment). No sync workflow or client code changes are needed to switch the URL:
 
@@ -123,6 +124,152 @@ Content-Type: application/json
 ```
 
 The local mock includes account `A500`. The API returns `202 Accepted` with a batch ID and status URL. Check batch counts at `GET /api/sync/account-batches/{batchId}` and individual item results at `GET /api/sync/account-batches/{batchId}/items?page=0&size=100`. The account batch has the same 10,000 unique-ID maximum, SQS batches of up to 10 messages, background retries, and dead-letter handling as contact batches. The local mock seeds `A500` with territory `100` and customer type code `DI`; the mapper converts these to the configured HubSpot dropdown labels and reverses known labels on HubSpot-to-INFOR sync. When updating an existing account through `POST /api/infor/accounts/{accountId}`, a `null` `hubSpotCompanyId` in the request preserves the ID already stored in the mock.
+
+## Deal, Order, Invoice, and Line Item mappings
+
+The supplied mapping workbook places Opportunities and HubSpot Deals in scope for two-way mapping. Infor ERP Orders and Invoices map one-way to HubSpot Orders, and their line items map one-way to HubSpot Line Items. `HubSpotDealMapper`, `HubSpotOrderMapper`, `HubSpotInvoiceMapper`, and `HubSpotLineItemMapper` now translate the existing canonical models into HubSpot property maps. The Deal reverse mapper only reads fields whose rows are explicitly marked two-way in the workbook.
+
+| Canonical Deal field | HubSpot property |
+| --- | --- |
+| Opportunity name / account ID | `dealname` / `account_id` |
+| Account manager | `account_maanger` |
+| Estimated / actual close date | `est_close_date` / `infor_close_date` |
+| Potential / actual amount / probability | `potential_amount` / `actual_amount` / `infor_probability` |
+| Stage / status / reason won | `dealstage` / `infor_status` / `closed_won_reason` |
+| Opportunity ID | `infor_opportunity_id` |
+| Lead source / owner / opportunity type / description | `lead_source` / `infor_owner` / `opportunity_type` / `description` |
+
+| Canonical Order field | HubSpot Order property |
+| --- | --- |
+| Entered date / order number / transaction type / stage | `entered_date` / `order_number` / `transaction_type` / `hs_pipeline_stage` |
+| Customer name / quantity ordered / reference / taken by | `customer_name` / `quantity_ordered` / `reference` / `taken_by` |
+| Customer number / ship-to name / division | `customer_number` / `ship_to_name` / `division` |
+| Shipped date / invoiced date | `shipped_date` / `invoice_date` |
+| Invoiced / ordered / shipped amount | `invoiced_amount` / `ordered_amount` / `shipped_amount` |
+| Inside/outside sales rep IDs and names; taken-by name | `inside_sales_rep`, `inside_sales_rep_name`, `outside_sales_rep`, `outside_sales_rep_name`, `taken_by_name` |
+| Vendor return authorization / order notes / customer notes | `vendor_return_authorization` / `order_notes` / `customer_notes` |
+
+| Canonical Invoice field | HubSpot Order property |
+| --- | --- |
+| Invoice number / order number / account ID / customer name | `invoice_number` / `order_number` / `account_id` / `customer_name` |
+| Invoice date / amount | `invoice_date` / `invoiced_amount` |
+
+| Canonical LineItem field | HubSpot Line Item property |
+| --- | --- |
+| Product SKU / name / unit price / quantity | `hs_sku` / `name` / `price` / `quantity` |
+| Order suffix / unit cost / profit / product category / order number | `order_suffix` / `unit_cost` / `profit` / `line_prodcat` / `order_number` |
+
+The workbook explicitly supplies only some HubSpot internal names; most unfilled cells are marked “Implementation Specialist to Complete.” The code uses the explicit internal names where supplied and conventional/native names for the remaining fields. Confirm every inferred name against the target HubSpot portal before enabling API writes. In particular, the workbook spells the Deal account-manager internal name `account_maanger`; it is retained as written and must be corrected in both the portal and mapper if that spelling is not intentional. The workbook also does not provide the HubSpot option IDs for deal stages or define a standalone Invoice object, so stage values are passed through and invoice properties are mapped onto the HubSpot Order object.
+
+### Runnable local business workflows
+
+`local` profile seeds mock opportunity `OPP-1001`, order `ORD-1001`, invoice `INV-1001`, and product `SKU-ICE-01`. Source test records can be read or replaced using `GET` / `PUT` at `/api/infor/opportunities/{id}`, `/api/infor/orders/{id}`, `/api/infor/invoices/{id}`, and `/api/infor/products/{sku}`. PUT JSON uses the `InforOpportunityDto`, `InforOrderDto`, `InforInvoiceDto`, and `InforProductDto` property names; IDs in the body must match the URL.
+
+The local SData mock also supports adding business records without replacing its seeded data. Use `POST` on a collection to create a record with a generated mock ID, `GET` on the collection to list seeded and added records, and `GET` / `PUT` on an item to read or update it:
+
+| Resource | Collection |
+| --- | --- |
+| Opportunities | `/mock/infor-sdata/sdata/slx/dynamic/-/opportunities` |
+| Orders | `/mock/infor-sdata/sdata/slx/dynamic/-/orders` |
+| Invoices | `/mock/infor-sdata/sdata/slx/dynamic/-/invoices` |
+| Products | `/mock/infor-sdata/sdata/slx/dynamic/-/products` |
+
+Collection GETs return SData feeds with `$resources` and support `startIndex` and `count`. Resource entries have absolute `$url` / `$lookup` links. Relationship fields use SData references with `$key`, `$url`, `$uuid`, and `$lookup`, rather than returning the foreign ID as the relationship itself. For example, an Opportunity uses `Account` and exposes navigable `Contacts`, `Products`, and `SalesOrders` child collections. An Order uses `Account` and gives each embedded line item a `Product` reference; an Invoice uses `Account`, `SalesOrder`, and line-item `Product` references. The local Order model keeps its account link key separately from `customerNumber`. Product itself is a standalone resource identified by `productSku`; products are linked from opportunity collections and order/invoice line items.
+
+For example, create an opportunity with `POST /mock/infor-sdata/sdata/slx/dynamic/-/opportunities?format=json` and a body like `{"opportunityName":"New equipment","Account":{"$key":"A500"},"Contacts":[{"$key":"103"}],"Products":[{"$key":"SKU-ICE-01"}],"SalesOrders":[{"$key":"ORD-1001"}],"potentialAmount":30000.00}`. The three association lists are explicit: use existing contact IDs, product SKUs, and order numbers. The returned opportunity includes `Contacts`, `Products`, and `SalesOrders` navigation links; follow them to receive paged SData feeds of the associated resources. A `PUT` containing one of these collection properties replaces that opportunity's association list, and `[]` clears it. References are checked against existing mock resources before the opportunity is saved. Create an order with a relationship-aware line item:
+
+```json
+{
+  "customerName": "Postman customer",
+  "customerNumber": "12345",
+  "Account": { "$key": "A500" },
+  "lineItems": [
+    {
+      "orderSuffix": "01",
+      "name": "Commercial ice maker",
+      "unitPrice": 1250.00,
+      "quantity": 2,
+      "Product": { "$key": "SKU-ICE-01" }
+    }
+  ]
+}
+```
+
+An Invoice can refer to existing resources similarly: `{"Account":{"$key":"A500"},"SalesOrder":{"$key":"ORD-1001"},"customerName":"Modern Ice Customer","invoiceDate":"2026-10-14","amount":2500.00}`. A Product is created as its own resource with `POST /mock/infor-sdata/sdata/slx/dynamic/-/products?format=json` and fields such as `name`, `unitPrice`, `unitCost`, `profit`, and `productCategory`; its response includes its generated `productSku`, `$key`, and `$url`. Use the generated key in a line item's `Product.$key`. Partial `PUT` requests update only supplied fields; omitted fields, including saved HubSpot IDs, are retained. To explicitly clear a field, include it with a JSON `null` value. These mock records are in memory and reset when the application restarts; this does not enable CRUD against a live Infor SData server.
+
+Trigger the workflows:
+
+| Direction | Request |
+| --- | --- |
+| INFOR Opportunity → HubSpot Deal | `POST /api/sync/opportunities/{opportunityId}` |
+| HubSpot Deal → INFOR Opportunity | `POST /api/sync/hubspot/deals/{hubSpotDealId}` |
+| INFOR Order → HubSpot Order + associated Line Items | `POST /api/sync/orders/{orderNumber}` |
+| INFOR Invoice → HubSpot Order + associated Line Items | `POST /api/sync/invoices/{invoiceNumber}` |
+| INFOR Product → HubSpot Line Item | `POST /api/sync/products/{productSku}` |
+
+These three POST sync routes now return the actual HubSpot object IDs in their JSON response. Order and Invoice responses include the parent `hubSpotObjectId` and every created/updated child `lineItemIds`; Product returns its HubSpot Line Item ID as `hubSpotObjectId` and saves that ID on the source product as `hubSpotLineItemId`.
+
+Example Order response:
+
+```json
+{
+  "sourceId": "ORD-1001",
+  "hubSpotObjectType": "orders",
+  "hubSpotObjectId": "700000001",
+  "lineItemIds": ["700000002"]
+}
+```
+
+Use the returned `lineItemIds` directly with `GET /api/hubspot/line-items/{id}`. For product sync, use `hubSpotObjectId` with the same GET route; verify the source product now carries the ID at `GET /api/infor/products/{sku}`. A resync reuses this saved ID instead of creating a duplicate.
+
+Example local test run:
+
+```http
+POST http://localhost:8081/api/sync/opportunities/OPP-1001
+POST http://localhost:8081/api/sync/orders/ORD-1001
+POST http://localhost:8081/api/sync/invoices/INV-1001
+POST http://localhost:8081/api/sync/products/SKU-ICE-01
+```
+
+To create or replace a local opportunity before syncing:
+
+```http
+PUT http://localhost:8081/api/infor/opportunities/OPP-1001
+Content-Type: application/json
+
+{
+  "opportunityId": "OPP-1001",
+  "hubSpotDealId": null,
+  "opportunityName": "Modern Ice Equipment Upgrade",
+  "accountId": "A500",
+  "accountManager": "U738UA00000M",
+  "estimatedCloseDate": "2026-12-31",
+  "potentialAmount": 25000.00,
+  "actualAmount": 0.00,
+  "probability": 0.5,
+  "stage": "appointmentscheduled",
+  "status": "Open",
+  "reasonWon": null,
+  "leadSource": "Referral",
+  "owner": "U738UA00002W",
+  "opportunityType": "Equipment - Standard",
+  "description": "Local sample opportunity"
+}
+```
+
+Read mock HubSpot business records at `GET /api/hubspot/deals/{id}`, `GET /api/hubspot/orders/{id}`, or `GET /api/hubspot/line-items/{id}`. To simulate a HubSpot Deal edit, `POST /api/hubspot/deals/{id}` with a JSON property map (for example `{"dealname":"Updated opportunity","potential_amount":"30000.00"}`), then explicitly call the HubSpot-to-INFOR sync route. The deal must carry `infor_opportunity_id` or have an identity mapping before it can sync back.
+
+INFOR DTOs are mapped to the existing canonical Deal, Order, Invoice, and LineItem models before entering workflow code. Persistent identities use the shared `integration_identity` table. Orders and invoices deliberately converge on one HubSpot Order record when their order number can be resolved; their individual line items are separately created/updated and associated with that Order. Product-only sync creates a HubSpot Line Item without an Order association.
+
+The previously implemented Account ↔ Company workflow remains at `/api/sync/accounts/{accountId}` and `/api/sync/hubspot/companies/{hubSpotCompanyId}`. Contact routes and behavior were not changed.
+
+### Real connector readiness
+
+`RealInforBusinessClient` and `RealSalesHubSpotClient` are selected for every non-`local` profile (including `dev`, `tst`, `uat`, and `prod`). The HubSpot real client supports CRM v3 deal/order/line-item object CRUD, and the Infor real client exposes typed methods and configurable CRM, ERP, and Data Lake base URLs plus authentication placeholders. It intentionally returns explicit “not implemented” errors until the actual Infor endpoints, authentication, and payload contracts are confirmed. The HubSpot Order-to-Line Item association call likewise remains an explicit TODO because the target Order object and association type must be confirmed in the portal. These production limitations do not affect local mock workflows.
+
+Configure the non-local INFOR connector placeholders using `INFOR_CRM_BASE_URL`, `INFOR_ERP_BASE_URL`, `INFOR_DATA_LAKE_BASE_URL`, `INFOR_BUSINESS_AUTH_TYPE`, and `INFOR_BUSINESS_ACCESS_TOKEN`; configure HubSpot using `HUBSPOT_BASE_URL` and `HUBSPOT_ACCESS_TOKEN`. Do not activate a non-local profile for live sync until the documented APIs, credentials, HubSpot custom property names, and required associations are verified.
+
+The new business sync routes are individual synchronous operations. The existing Contact and Account batch queues remain as implemented; asynchronous batch queues for opportunities, orders, invoices, and products have not been added.
 
 ## Run locally
 

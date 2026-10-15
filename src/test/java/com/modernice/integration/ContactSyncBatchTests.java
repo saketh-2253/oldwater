@@ -1,6 +1,13 @@
 package com.modernice.integration;
 
+import com.modernice.integration.connector.hubspot.MockHubSpotClient;
+import com.modernice.integration.connector.hubspot.mapper.HubSpotContactMapper;
+import com.modernice.integration.connector.infor.crm.MockInforCrmClient;
+import com.modernice.integration.connector.infor.crm.dto.InforContactDto;
+import com.modernice.integration.connector.infor.crm.mapper.InforContactMapper;
 import com.modernice.integration.domain.enums.ContactSyncItemStatus;
+import com.modernice.integration.identity.ContactIdentityService;
+import com.modernice.integration.mapping.ValueMappingService;
 import com.modernice.integration.persistence.entity.ContactSyncBatchEntity;
 import com.modernice.integration.persistence.entity.ContactSyncBatchItemEntity;
 import com.modernice.integration.persistence.repository.ContactSyncBatchItemRepository;
@@ -30,6 +37,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -129,6 +137,51 @@ class ContactSyncBatchTests {
 
         assertThat(item.getStatus()).isEqualTo(ContactSyncItemStatus.FAILED);
         verify(contactSyncQueue).deadLetter(delivery, "INFOR CRM contact not found: missing");
+    }
+
+    @Test
+    void workerSuccessfullySyncsCreatedMockContactWithGeneratedStyleId() {
+        String contactId = "C-MOCK-f1b9695d-c7ec-479c-b5f2-0310ea85d03b";
+        MockInforCrmClient inforClient = new MockInforCrmClient();
+        inforClient.upsertContact(new InforContactDto(
+                contactId, "Jane", "Doe", "Postman Test Account", "POSTMAN-CUSTOMER-001",
+                "A500", "Columbus", "OH", null, null, "jane.doe@example.com",
+                null, "Customer", "100", Instant.now(), Instant.now(), null, null, null
+        )).block();
+        MockHubSpotClient hubSpotClient = new MockHubSpotClient();
+        ContactSyncWorkflow workflow = new ContactSyncWorkflow(
+                inforClient,
+                new InforContactMapper(),
+                new HubSpotContactMapper(new ValueMappingService()),
+                hubSpotClient,
+                mock(ContactIdentityService.class)
+        );
+        LocalContactSyncQueue queue = new LocalContactSyncQueue();
+        UUID batchId = UUID.randomUUID();
+        UUID itemId = UUID.randomUUID();
+        ContactSyncBatchItemEntity item = ContactSyncBatchItemEntity.builder()
+                .id(itemId)
+                .batchId(batchId)
+                .crmContactId(contactId)
+                .status(ContactSyncItemStatus.QUEUED)
+                .createdAt(Instant.now())
+                .updatedAt(Instant.now())
+                .build();
+        queue.enqueue(List.of(new ContactSyncMessage(batchId, itemId, contactId)));
+        when(itemRepository.findById(itemId)).thenReturn(Optional.of(item));
+        when(itemRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        var worker = new ContactSyncQueueWorker(queue, itemRepository, workflow);
+        ReflectionTestUtils.setField(worker, "maxAttempts", 5);
+        worker.processMessages();
+
+        assertThat(item.getStatus()).isEqualTo(ContactSyncItemStatus.SUCCEEDED);
+        assertThat(item.getLastError()).isNull();
+        InforContactDto synced = inforClient.getContact(contactId).block();
+        assertThat(synced.hubSpotRecordId()).isNotBlank();
+        assertThat(hubSpotClient.getContact(synced.hubSpotRecordId()).block())
+                .containsEntry("crm_contact_id", contactId)
+                .containsEntry("email", "jane.doe@example.com");
     }
 
     @Test

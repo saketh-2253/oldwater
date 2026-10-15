@@ -2,6 +2,7 @@ package com.modernice.integration;
 
 import com.modernice.integration.connector.hubspot.HubSpotClient;
 import com.modernice.integration.connector.hubspot.MockHubSpotClient;
+import com.modernice.integration.connector.hubspot.dto.HubSpotCompanyRequest;
 import com.modernice.integration.connector.hubspot.dto.HubSpotContactRequest;
 import com.modernice.integration.connector.hubspot.mapper.HubSpotContactMapper;
 import com.modernice.integration.connector.infor.crm.InforCrmClient;
@@ -28,6 +29,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
 import java.util.Map;
@@ -100,7 +102,6 @@ class IntegrationApplicationTests {
         var controller = new ContactSyncController(contactSyncWorkflow, contactSyncBatchService,
                 accountSyncWorkflow, accountSyncBatchService, inforCrmClient, hubSpotClient);
 
-        when(contactSyncWorkflow.syncHubSpotContactToInfor("hub-123")).thenReturn(Mono.empty());
         controller.upsertHubSpotContact("hub-123", Map.of(
             "firstName", "Saketh",
             "lastName", "Reddy"
@@ -111,15 +112,14 @@ class IntegrationApplicationTests {
         assertThat(captor.getValue().properties())
             .containsEntry("firstname", "Saketh")
             .containsEntry("lastname", "Reddy");
-        verify(contactSyncWorkflow).syncHubSpotContactToInfor("hub-123");
+        verify(contactSyncWorkflow, never()).syncHubSpotContactToInfor("hub-123");
         }
 
             @Test
-            void upsertHubSpotContact_createsMissingRecordAndSyncsItToInfor() {
+            void upsertHubSpotContact_createsMissingRecordWithoutSyncingToInfor() {
             when(hubSpotClient.getContact("hs-102")).thenReturn(Mono.empty());
             when(hubSpotClient.upsertContact(eq("hs-102"), any(HubSpotContactRequest.class)))
                 .thenReturn(Mono.empty());
-            when(contactSyncWorkflow.syncHubSpotContactToInfor("hs-102")).thenReturn(Mono.empty());
             var controller = new ContactSyncController(contactSyncWorkflow, contactSyncBatchService,
                     accountSyncWorkflow, accountSyncBatchService, inforCrmClient, hubSpotClient);
 
@@ -135,8 +135,123 @@ class IntegrationApplicationTests {
                 .containsEntry("crm_contact_id", "crm-102")
                 .containsEntry("firstname", "Micheal")
                 .containsEntry("lastname", "Jordon");
-            verify(contactSyncWorkflow).syncHubSpotContactToInfor("hs-102");
+            verify(contactSyncWorkflow, never()).syncHubSpotContactToInfor("hs-102");
             }
+
+    @Test
+    void upsertHubSpotCompany_updatesPropertiesWithoutSyncingToInfor() {
+            when(hubSpotClient.getCompany("hs-company-1")).thenReturn(Mono.just(Map.of(
+                    "name", "Old Name",
+                    "city", "Cincinnati",
+                    "infor_account_id", "A500"
+            )));
+            when(hubSpotClient.updateCompany(eq("hs-company-1"), any(HubSpotCompanyRequest.class)))
+                    .thenReturn(Mono.empty());
+            var controller = new ContactSyncController(contactSyncWorkflow, contactSyncBatchService,
+                    accountSyncWorkflow, accountSyncBatchService, inforCrmClient, hubSpotClient);
+
+            controller.upsertHubSpotCompany("hs-company-1", Map.of(
+                    "name", "New Name",
+                    "city", "Columbus"
+            )).block();
+
+            ArgumentCaptor<HubSpotCompanyRequest> captor = ArgumentCaptor.forClass(HubSpotCompanyRequest.class);
+            verify(hubSpotClient).updateCompany(eq("hs-company-1"), captor.capture());
+            assertThat(captor.getValue().properties())
+                    .containsEntry("name", "New Name")
+                    .containsEntry("city", "Columbus")
+                    .containsEntry("infor_account_id", "A500");
+            verify(accountSyncWorkflow, never()).syncHubSpotCompanyToInfor("hs-company-1");
+    }
+
+    @Test
+    void upsertHubSpotCompany_requiresInforAccountIdWhenCreating() {
+            when(hubSpotClient.getCompany("new-company")).thenReturn(Mono.empty());
+            var controller = new ContactSyncController(contactSyncWorkflow, contactSyncBatchService,
+                    accountSyncWorkflow, accountSyncBatchService, inforCrmClient, hubSpotClient);
+
+            assertThatThrownBy(() -> controller.upsertHubSpotCompany("new-company", Map.of("name", "Test")).block())
+                    .hasMessageContaining("inforAccountId is required");
+            verify(hubSpotClient, never()).updateCompany(anyString(), any(HubSpotCompanyRequest.class));
+            verify(accountSyncWorkflow, never()).syncHubSpotCompanyToInfor(anyString());
+    }
+
+    @Test
+    void getInforContact_returnsNotFoundWhenContactIsMissing() {
+            when(inforCrmClient.getContact("missing")).thenReturn(Mono.empty());
+            var controller = new ContactSyncController(contactSyncWorkflow, contactSyncBatchService,
+                    accountSyncWorkflow, accountSyncBatchService, inforCrmClient, hubSpotClient);
+
+            assertThatThrownBy(() -> controller.getMockInforContact("missing").block())
+                    .isInstanceOf(ResponseStatusException.class)
+                    .hasMessageContaining("404 NOT_FOUND")
+                    .hasMessageContaining("INFOR contact not found: missing");
+    }
+
+    @Test
+    void reverseContactSyncReturnsNotFoundForMissingHubSpotContact() {
+            when(hubSpotClient.getContact("missing-hubspot")).thenReturn(Mono.empty());
+            var workflow = new ContactSyncWorkflow(
+                    inforCrmClient,
+                    inforContactMapper,
+                    new HubSpotContactMapper(new ValueMappingService()),
+                    hubSpotClient,
+                    contactIdentityService
+            );
+
+            assertThatThrownBy(() -> workflow.syncHubSpotContactToInfor("missing-hubspot").block())
+                    .isInstanceOf(ResponseStatusException.class)
+                    .hasMessageContaining("404 NOT_FOUND")
+                    .hasMessageContaining("HubSpot contact not found: missing-hubspot");
+            verify(inforCrmClient, never()).upsertContact(any());
+    }
+
+    @Test
+    void reverseContactSyncRejectsRecordWithoutInforIdentity() {
+            when(hubSpotClient.getContact("hub-without-infor-id")).thenReturn(Mono.just(Map.of(
+                    "firstname", "Jane",
+                    "lastname", "Doe"
+            )));
+            when(contactIdentityService.findCrmContactId("hub-without-infor-id")).thenReturn(Optional.empty());
+            var workflow = new ContactSyncWorkflow(
+                    inforCrmClient,
+                    inforContactMapper,
+                    new HubSpotContactMapper(new ValueMappingService()),
+                    hubSpotClient,
+                    contactIdentityService
+            );
+
+            assertThatThrownBy(() -> workflow.syncHubSpotContactToInfor("hub-without-infor-id").block())
+                    .isInstanceOf(ResponseStatusException.class)
+                    .hasMessageContaining("400 BAD_REQUEST")
+                    .hasMessageContaining("crm_contact_id");
+            verify(inforCrmClient, never()).upsertContact(any());
+    }
+
+    @Test
+    void reverseContactSyncUsesSavedIdentityWhenHubSpotCrmIdIsBlank() {
+            when(hubSpotClient.getContact("hub-456")).thenReturn(Mono.just(Map.of(
+                    "crm_contact_id", " ",
+                    "firstname", "Jane"
+            )));
+            when(contactIdentityService.findCrmContactId("hub-456")).thenReturn(Optional.of("crm-456"));
+            when(inforCrmClient.upsertContact(any(InforContactDto.class))).thenReturn(Mono.empty());
+            when(inforCrmClient.updateHubSpotRecordId("crm-456", "hub-456")).thenReturn(Mono.empty());
+            var workflow = new ContactSyncWorkflow(
+                    inforCrmClient,
+                    inforContactMapper,
+                    new HubSpotContactMapper(new ValueMappingService()),
+                    hubSpotClient,
+                    contactIdentityService
+            );
+
+            workflow.syncHubSpotContactToInfor("hub-456").block();
+
+            ArgumentCaptor<InforContactDto> captor = ArgumentCaptor.forClass(InforContactDto.class);
+            verify(inforCrmClient).upsertContact(captor.capture());
+            assertThat(captor.getValue().crmContactId()).isEqualTo("crm-456");
+            verify(contactIdentityService).saveMapping("crm-456", "hub-456", null);
+    }
 
     @Test
     void mockInforCrmClient_canUpdateContactAtRuntime() {
